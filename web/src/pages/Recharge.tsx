@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { toDataURL } from 'qrcode'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
-import { Badge, Button, ErrorText, Input } from '../components/ui'
+import { Badge, Button, ErrorText, Input, Modal } from '../components/ui'
 import { fmtMoney, fmtTime } from '../lib/format'
 
 interface OrderRow {
@@ -9,11 +10,19 @@ interface OrderRow {
   order_no: string
   amount: number
   credits: number
+  provider: string
   pay_type: string | null
   status: string
   trade_no: string | null
   created_at: string
   paid_at: string | null
+}
+
+interface QrInfo {
+  qr: string
+  provider: string
+  orderNo: string
+  amount: number
 }
 
 const PRESETS = [10, 50, 100, 500]
@@ -27,6 +36,8 @@ export default function Recharge() {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [qrInfo, setQrInfo] = useState<QrInfo | null>(null)
+  const [qrDataUrl, setQrDataUrl] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadOrders = useCallback(async () => {
@@ -42,7 +53,16 @@ export default function Recharge() {
     }
   }, [loadOrders])
 
-  // 轮询最新一笔 pending 订单，支付成功后刷新余额
+  // 生成二维码图片
+  useEffect(() => {
+    if (qrInfo) {
+      toDataURL(qrInfo.qr, { width: 220, margin: 1 }).then(setQrDataUrl).catch(() => setQrDataUrl(''))
+    } else {
+      setQrDataUrl('')
+    }
+  }, [qrInfo])
+
+  // 轮询订单状态，支付成功后自动到账
   function startPolling(orderNo: string) {
     if (pollRef.current) clearInterval(pollRef.current)
     pollRef.current = setInterval(async () => {
@@ -50,14 +70,14 @@ export default function Recharge() {
       if (data?.status === 'paid') {
         if (pollRef.current) clearInterval(pollRef.current)
         setNotice('充值成功，余额已到账 ✓')
+        setQrInfo(null)
         await refreshProfile()
         await loadOrders()
       }
     }, 3000)
-    // 10 分钟后停止轮询
     setTimeout(() => {
       if (pollRef.current) clearInterval(pollRef.current)
-    }, 600_000)
+    }, 900_000)
   }
 
   async function onPay() {
@@ -86,8 +106,13 @@ export default function Recharge() {
       }
       await loadOrders()
       startPolling(body.order_no)
-      // 新窗口打开支付页（扫码/跳转），当前页面轮询订单状态
-      window.open(body.pay_url, '_blank')
+      if (body.type === 'qr') {
+        // 官方通道：页内扫码
+        setQrInfo({ qr: body.qr, provider: body.provider, orderNo: body.order_no, amount: body.amount })
+      } else {
+        // 易支付：新窗口打开收银台
+        window.open(body.url, '_blank')
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -99,6 +124,13 @@ export default function Recharge() {
     if (s === 'paid') return <Badge tone="green">已支付</Badge>
     if (s === 'pending') return <Badge tone="amber">待支付</Badge>
     return <Badge tone="slate">{s === 'expired' ? '已过期' : s}</Badge>
+  }
+
+  const providerName = (p: string) => {
+    if (p === 'alipay') return '支付宝官方'
+    if (p === 'wechat') return '微信官方'
+    if (p === 'epay') return '易支付'
+    return p
   }
 
   return (
@@ -178,7 +210,7 @@ export default function Recharge() {
           <div className="py-12 text-center text-sm text-slate-400">暂无充值记录</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[680px] text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50/60 text-left text-xs text-slate-400">
                   <th className="px-5 py-3 font-medium">订单号</th>
@@ -196,7 +228,7 @@ export default function Recharge() {
                     <td className="px-5 py-2.5 text-xs text-slate-700">{fmtMoney(o.amount)}</td>
                     <td className="px-5 py-2.5 text-xs font-medium text-emerald-600">{fmtMoney(o.credits)}</td>
                     <td className="px-5 py-2.5 text-xs text-slate-500">
-                      {o.pay_type === 'wxpay' ? '微信' : o.pay_type === 'alipay' ? '支付宝' : '-'}
+                      {o.pay_type === 'wxpay' ? '微信' : '支付宝'} · {providerName(o.provider)}
                     </td>
                     <td className="px-5 py-2.5">{statusBadge(o.status)}</td>
                     <td className="px-5 py-2.5 text-xs text-slate-500">{fmtTime(o.paid_at ?? o.created_at)}</td>
@@ -207,6 +239,34 @@ export default function Recharge() {
           </div>
         )}
       </div>
+
+      {/* 扫码支付弹窗（官方通道） */}
+      <Modal open={!!qrInfo} onClose={() => setQrInfo(null)} title="扫码支付">
+        {qrInfo && (
+          <div className="flex flex-col items-center gap-4">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-400">订单号</span>
+              <span className="font-mono text-xs text-slate-600">{qrInfo.orderNo.slice(-10)}</span>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              {qrDataUrl ? (
+                <img src={qrDataUrl} alt="支付二维码" width={220} height={220} />
+              ) : (
+                <div className="flex h-[220px] w-[220px] items-center justify-center text-xs text-slate-400">二维码生成中…</div>
+              )}
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-slate-800">¥{qrInfo.amount.toFixed(2)}</div>
+              <p className="mt-1 text-xs text-slate-400">
+                请使用{qrInfo.provider === 'wechat' ? '微信' : '支付宝'}扫一扫完成支付
+                <br />
+                支付成功后本页面自动刷新余额
+              </p>
+            </div>
+            <Button variant="secondary" onClick={() => setQrInfo(null)}>取消支付</Button>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
