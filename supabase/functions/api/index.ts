@@ -552,10 +552,12 @@ Deno.serve(async (req) => {
     return new Response(null, { status: 204, headers: CORS_HEADERS })
   }
 
-  // /functions/v1/api/v1/chat/completions -> v1/chat/completions -> chat/completions
+  // 兼容两种形式：平台可能传入完整 /functions/v1/api/v1/chat/completions，
+  // 也可能剥掉 /functions/v1 前缀后传入 /api/v1/chat/completions
   const url = new URL(req.url)
-  const path = url.pathname.replace(/^\/functions\/v1\/api\/?/, '')
-  const route = path.replace(/^\/?v1\/?/, '').replace(/^\/+|\/+$/g, '')
+  let path = url.pathname.replace(/^\/functions\/v1\/?/, '')
+  path = path.replace(/^\/+api(?:\/|$)/, '')
+  const route = path.replace(/^\/?v1(?:\/|$)/, '').replace(/^\/+|\/+$/g, '')
 
   if (route === '' || route === 'health') {
     return json(200, { ok: true, service: 'aiapi-gateway' })
