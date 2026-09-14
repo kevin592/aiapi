@@ -7,3 +7,7 @@ dist/
 *.local
 supabase/.temp/
 supabase/.branches/
+
+.db-password
+.admin-password
+.admin-api-key
