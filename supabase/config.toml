@@ -1,0 +1,13 @@
+project_id = "aiapi"
+
+# API 网关：使用自定义 sk- 令牌鉴权，必须关闭平台的 JWT 校验
+[functions.api]
+verify_jwt = false
+
+# 创建支付订单：需要登录（平台 JWT 校验）
+[functions.pay-create]
+verify_jwt = true
+
+# 支付回调：由支付平台服务器调用，无 JWT，使用 MD5 签名校验
+[functions.pay-notify]
+verify_jwt = false
